@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+
+from datetime import datetime, timezone, timedelta
+import argparse
+import boto3
+import os.path
+
+
+now = datetime.now(timezone.utc)
+
+s3 = boto3.client("s3")
+ec2 = boto3.client("ec2")
+
+
+def list_obj_groups(bucket, prefix):
+    acc = {}
+
+    def rec(prefix):
+        res = s3.list_objects(Bucket=bucket, Prefix=prefix, Delimiter="/")
+
+        if "CommonPrefixes" in res:
+            for common_prefix in res["CommonPrefixes"]:
+                rec(common_prefix["Prefix"])
+
+        if "Contents" in res:
+            acc[prefix] = res["Contents"]
+
+    rec(prefix)
+    return acc
+
+
+def gc(bucket, prefix, retain_rules):
+    for (group_name, objs) in list_obj_groups(bucket, prefix).items():
+        retained_keys = {}
+        for (reason, rule) in retain_rules:
+            for key in rule(objs):
+                retained_keys.setdefault(key, set()).add(reason)
+
+        print(f"=== {group_name}")
+        for obj in sorted(objs, key=lambda obj: obj["LastModified"], reverse=True):
+            key = obj["Key"]
+            age = now - obj["LastModified"]
+            if key in retained_keys:
+                reasons = retained_keys[key]
+                print(f"retain: {key} {age.days}d {reasons}")
+            else:
+                print(f"delete: {key} {age.days}d")
+
+
+def retain_count(n):
+    def rule(objs):
+        objs = sorted(objs, key=lambda obj: obj["LastModified"], reverse=True)
+        return {obj["Key"] for obj in objs[:n]}
+
+    return (f"retain_count({n})", rule)
+
+
+def retain_hours(n):
+    age = timedelta(hours=n)
+    threshold = now - age
+
+    def rule(objs):
+        return {obj["Key"] for obj in objs if obj["LastModified"] >= threshold}
+
+    return (f"retain_hours({n})", rule)
+
+
+def retain_instance_image():
+    res = ec2.describe_instances(
+        Filters=[
+            {
+                "Name": "instance-state-name",
+                "Values": ["pending", "running", "stopping", "stopped"],
+            }
+        ]
+    )
+
+    res = ec2.describe_images(
+        ImageIds=list(
+            {
+                instance["ImageId"]
+                for reservation in res["Reservations"]
+                for instance in reservation["Instances"]
+            }
+        )
+    )
+
+    image_names = {image["Name"] for image in res["Images"]}
+
+    def image_name(obj):
+        key = obj["Key"]
+        (name, _) = os.path.splitext(os.path.basename(key))
+        return name
+
+    def rule(objs):
+        return {obj["Key"] for obj in objs if image_name(obj) in image_names}
+
+    return (f"retain_instance_image", rule)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Garbage collects an S3 bucket", allow_abbrev=False
+    )
+    parser.add_argument("--bucket", required=True)
+    parser.add_argument("--prefix", default="")
+    parser.add_argument("--retain-count", type=int, metavar="COUNT")
+    parser.add_argument("--retain-hours", type=int, metavar="HOURS")
+    parser.add_argument("--retain-instance-image", action="store_true")
+
+    args = parser.parse_args()
+
+    retain_rules = []
+
+    if args.retain_count:
+        retain_rules.append(retain_count(args.retain_count))
+    if args.retain_hours:
+        retain_rules.append(retain_hours(args.retain_hours))
+    if args.retain_instance_image:
+        retain_rules.append(retain_instance_image())
+
+    gc(args.bucket, args.prefix, retain_rules)
