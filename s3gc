@@ -29,12 +29,25 @@ def list_obj_groups(bucket, prefix):
     return acc
 
 
+def delete_keys(bucket, keys):
+    res = s3.delete_objects(
+        Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True}
+    )
+
+    failed_keys = {err["Key"] for err in res["Errors"]}
+    if len(failed_keys) > 0:
+        print(f"Failed to delete keys: {failed_keys}")
+        exit(1)
+
+
 def gc(bucket, prefix, retain_rules):
     for (group_name, objs) in list_obj_groups(bucket, prefix).items():
         retained_keys = {}
         for (reason, rule) in retain_rules:
             for key in rule(objs):
                 retained_keys.setdefault(key, set()).add(reason)
+
+        garbage_keys = {obj["Key"] for obj in objs} - retained_keys.keys()
 
         print(f"=== {group_name}")
         for obj in sorted(objs, key=lambda obj: obj["LastModified"], reverse=True):
@@ -44,7 +57,11 @@ def gc(bucket, prefix, retain_rules):
                 reasons = retained_keys[key]
                 print(f"retain: {key} {age.days}d {reasons}")
             else:
+                assert key in garbage_keys
                 print(f"delete: {key} {age.days}d")
+
+        if len(garbage_keys) > 0:
+            delete_keys(bucket, garbage_keys)
 
 
 def retain_count(n):
