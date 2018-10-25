@@ -40,7 +40,7 @@ def delete_keys(bucket, keys):
         exit(1)
 
 
-def gc(bucket, prefix, retain_rules):
+def gc(bucket, prefix, retain_rules, dry_run):
     for (group_name, objs) in list_obj_groups(bucket, prefix).items():
         retained_keys = {}
         for (reason, rule) in retain_rules:
@@ -60,7 +60,7 @@ def gc(bucket, prefix, retain_rules):
                 assert key in garbage_keys
                 print(f"delete: {key} {age.days}d")
 
-        if len(garbage_keys) > 0:
+        if len(garbage_keys) > 0 and not dry_run:
             delete_keys(bucket, garbage_keys)
 
 
@@ -124,6 +124,7 @@ if __name__ == "__main__":
     parser.add_argument("--retain-count", type=int, metavar="COUNT")
     parser.add_argument("--retain-hours", type=int, metavar="HOURS")
     parser.add_argument("--retain-instance-image", action="store_true")
+    parser.add_argument("-n", "--dry-run", action="store_true")
 
     args = parser.parse_args()
 
@@ -136,4 +137,4 @@ if __name__ == "__main__":
     if args.retain_instance_image:
         retain_rules.append(retain_instance_image())
 
-    gc(args.bucket, args.prefix, retain_rules)
+    gc(args.bucket, args.prefix, retain_rules, args.dry_run)
