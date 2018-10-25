@@ -138,4 +138,8 @@ if __name__ == "__main__":
     if args.retain_instance_image:
         retain_rules.append(retain_instance_image())
 
+    if len(retain_rules) == 0:
+        print("No retain rules specified. Refusing to delete all keys!")
+        exit(1)
+
     gc(args.bucket, args.prefix, retain_rules, args.dry_run)
