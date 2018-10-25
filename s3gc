@@ -34,8 +34,9 @@ def delete_keys(bucket, keys):
         Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True}
     )
 
-    failed_keys = {err["Key"] for err in res["Errors"]}
-    if len(failed_keys) > 0:
+    if "Errors" in res:
+        failed_keys = {err["Key"] for err in res["Errors"]}
+        assert len(failed_keys) > 0
         print(f"Failed to delete keys: {failed_keys}")
         exit(1)
 
